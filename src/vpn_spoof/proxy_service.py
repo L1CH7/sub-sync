@@ -98,6 +98,15 @@ class SpoofProxyServer:
 
         stop_ev = threading.Event()
         try:
+            import signal
+            def _sig_handler(signum, frame):
+                stop_ev.set()
+            signal.signal(signal.SIGTERM, _sig_handler)
+            signal.signal(signal.SIGINT, _sig_handler)
+        except Exception:
+            pass
+
+        try:
             res = wait_for_cancel(stop_ev)
             if res == 'back':
                 print("\n[!] Остановка прокси и возврат в главное меню...")

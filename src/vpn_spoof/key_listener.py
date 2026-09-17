@@ -40,42 +40,18 @@ def get_single_key() -> str:
 def wait_for_cancel(stop_event: threading.Event, timeout_step: float = 0.1) -> str:
     """
     Waits until stop_event is set OR user presses 'q', '0', Esc, or Ctrl+C.
-    Returns:
-        'stop': stop_event was triggered externally
-        'back': user pressed 'q', '0', or Esc
-        raises KeyboardInterrupt on Ctrl+C
+    In non-interactive mode (daemon/service where stdin is not a tty),
+    blocks until stop_event is set or process receives a signal.
     """
-    if sys.platform == "win32":
-        import msvcrt
-        while not stop_event.is_set():
-            if msvcrt.kbhit():
-                ch = msvcrt.getch()
-                if ch == b'\x03':  # Ctrl+C
-                    raise KeyboardInterrupt
-                if ch in (b'\x00', b'\xe0'):
-                    msvcrt.getch()
-                    continue
-                try:
-                    c = ch.decode("utf-8", errors="ignore").lower()
-                    if c in ('q', '0', '\x1b'):
-                        return 'back'
-                except Exception:
-                    pass
-            time.sleep(timeout_step)
-        return 'stop'
-    else:
-        import select
-
-        if not sys.stdin.isatty():
+    if not sys.stdin or not hasattr(sys.stdin, "isatty") or not sys.stdin.isatty():
+        try:
             while not stop_event.is_set():
-                r, _, _ = select.select([sys.stdin], [], [], timeout_step)
-                if r:
-                    line = sys.stdin.readline()
-                    if not line:
-                        return 'stop'
-                    if line.strip().lower() in ('q', '0'):
-                        return 'back'
-            return 'stop'
+                time.sleep(timeout_step)
+        except (KeyboardInterrupt, SystemExit):
+            pass
+        return 'stop'
+
+    if sys.platform == "win32":
 
         import tty
         import termios
