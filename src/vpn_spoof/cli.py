@@ -195,7 +195,7 @@ def service_menu():
         try:
             choice = get_key()
             console.print(choice)
-        except (KeyboardInterrupt, EOFError):
+        except EOFError:
             break
 
         if choice in ["q", "0"]:
@@ -232,7 +232,7 @@ def bundle_action():
         try:
             choice = get_key()
             console.print(choice)
-        except (KeyboardInterrupt, EOFError):
+        except EOFError:
             break
 
         if choice in ["q", "0"]:
@@ -267,7 +267,7 @@ def interactive_loop():
         try:
             choice = get_key()
             console.print(choice)
-        except (KeyboardInterrupt, EOFError):
+        except EOFError:
             console.print("\nЗавершение работы.")
             break
 
@@ -303,7 +303,7 @@ def interactive_loop():
             try:
                 confirm = get_key()
                 console.print(confirm)
-            except (KeyboardInterrupt, EOFError):
+            except EOFError:
                 continue
             if confirm == "y":
                 config_store.save({})

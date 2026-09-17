@@ -52,7 +52,25 @@ def wait_for_cancel(stop_event: threading.Event, timeout_step: float = 0.1) -> s
         return 'stop'
 
     if sys.platform == "win32":
-
+        import msvcrt
+        while not stop_event.is_set():
+            if msvcrt.kbhit():
+                ch = msvcrt.getch()
+                if ch == b'\x03':  # Ctrl+C
+                    raise KeyboardInterrupt
+                if ch in (b'\x00', b'\xe0'):
+                    msvcrt.getch()
+                    continue
+                try:
+                    c = ch.decode("utf-8", errors="ignore").lower()
+                    if c in ('q', '0', '\x1b'):
+                        return 'back'
+                except Exception:
+                    pass
+            time.sleep(timeout_step)
+        return 'stop'
+    else:
+        import select
         import tty
         import termios
 
