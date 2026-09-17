@@ -1,0 +1,15 @@
+{
+  "listen_port": 54321,
+  "target_url": "https://provider.example.com/sublink/xxx",
+  "headers": {
+    "User-Agent": "Happ/4.14.0/ios/0000000000",
+    "X-HWID": "a1b2c3d4e5f60718",
+    "X-Device-OS": "iOS",
+    "X-Device-model": "iPhone 14",
+    "X-Ver-OS": "27.0.0",
+    "X-App-Version": "4.14.0",
+    "X-Device-Locale": "ru",
+    "Accept-Language": "ru",
+    "Accept": "*/*"
+  }
+}

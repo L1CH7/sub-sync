@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+data/*
+!data/.gitkeep
+!data/config.example.json
+*.log
+*.yaml
+.DS_Store
+Thumbs.db
+*.pem
+*.key
+*.crt
