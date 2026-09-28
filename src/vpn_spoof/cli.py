@@ -16,10 +16,12 @@ from .bundle_transfer import BundleTransfer
 from .config_store import ConfigStore
 from .net_utils import get_best_local_ip
 
-console = Console(legacy_windows=False)
+console = Console()
 
 def clear_screen():
-    os.system("cls" if sys.platform == "win32" else "clear")
+    # Fast, flicker-free ANSI screen clear and cursor reset
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
 
 from .key_listener import get_single_key as get_key, wait_key
 

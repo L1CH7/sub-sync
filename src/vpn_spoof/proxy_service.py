@@ -13,8 +13,9 @@ from .key_listener import wait_for_cancel
 DATA_DIR = Path(__file__).absolute().parent.parent.parent / "data"
 DUMP_PATH = DATA_DIR / "last_response.yaml"
 
-class ReusableHTTPServer(http.server.HTTPServer):
+class ReusableHTTPServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
+    daemon_threads = True
 
 class SpoofProxyServer:
     def __init__(self, listen_port: int = 54321, host: str = "127.0.0.1"):
@@ -25,13 +26,34 @@ class SpoofProxyServer:
     def create_handler(self):
         parent = self
         class SpoofHandler(http.server.BaseHTTPRequestHandler):
+            def serve_cached_fallback(self, reason: str):
+                """Serves cached last_response.yaml to keep VPN client alive."""
+                if DUMP_PATH.exists() and DUMP_PATH.stat().st_size > 0:
+                    print(f"[!] Внимание: {reason}")
+                    print(f"[*] Отдаём сохранённый кэш ({DUMP_PATH.name}), чтобы не разорвать VPN-соединение...")
+                    try:
+                        with open(DUMP_PATH, "rb") as f_cached:
+                            content = f_cached.read()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/yaml; charset=utf-8")
+                        self.send_header("X-SubSync-Status", "served-from-cache")
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.end_headers()
+                        self.wfile.write(content)
+                        print(f"[+] Профиль из кэша успешно передан клиенту ({len(content)} байт)\n")
+                        return True
+                    except Exception as ex:
+                        print(f"[-] Ошибка чтения кэша: {ex}")
+                return False
+
             def do_GET(self):
                 cfg = parent.config_store.load()
                 target_url = cfg.get("target_url")
                 headers = cfg.get("headers", {})
 
                 if not target_url:
-                    self.send_error(500, "Target URL missing in config.json. Run link capture first.")
+                    if not self.serve_cached_fallback("Ссылка подписки отсутствует в config.json"):
+                        self.send_error(500, "Target URL missing in config.json. Run link capture first.")
                     return
 
                 print(f"[*] Forwarding request with HWID: {headers.get('X-HWID', 'N/A')} and UA: {headers.get('User-Agent', 'N/A')}")
@@ -40,7 +62,7 @@ class SpoofProxyServer:
                 
                 try:
                     ctx = ssl.create_default_context()
-                    with urllib.request.urlopen(req, context=ctx, timeout=20) as response:
+                    with urllib.request.urlopen(req, context=ctx, timeout=10) as response:
                         content = response.read()
                         status = response.status
 
@@ -64,11 +86,17 @@ class SpoofProxyServer:
 
                 except urllib.error.HTTPError as e:
                     print(f"[-] Target returned HTTP {e.code}")
+                    # If target returned a server error or rate limit, fall back to cache
+                    if e.code in (403, 429, 500, 502, 503, 504) and self.serve_cached_fallback(f"Провайдер вернул HTTP {e.code}"):
+                        return
                     self.send_response(e.code)
                     self.end_headers()
                     self.wfile.write(e.read())
+
                 except Exception as e:
                     print(f"[-] Forwarding error: {e}")
+                    if self.serve_cached_fallback(f"Сбой сети при запросе к провайдеру ({e})"):
+                        return
                     self.send_response(500)
                     self.end_headers()
                     self.wfile.write(str(e).encode())

@@ -39,6 +39,6 @@ class BundleTransfer:
 
     def print_export_qr(self):
         bundle = self.export_bundle_string()
-        print_qr_banner('📦 QR ДЛЯ ПЕРЕНОСА КОНФИГА НА ДРУГОЙ ПК', bundle)
+        print_qr_banner('📦 QR ДЛЯ ПЕРЕНОСА КОНФИГА НА ДРУГОЙ ПК', bundle, save_path=DATA_DIR / "qr_bundle.png")
         print('Или скопируйте строку бандла:')
         print(f'{bundle}\n')

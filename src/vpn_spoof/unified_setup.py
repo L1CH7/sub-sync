@@ -9,20 +9,21 @@ from pathlib import Path
 from typing import Optional, Set
 from rich.console import Console
 
-from .net_utils import get_best_local_ip, get_all_ip_addresses
+from .net_utils import get_best_local_ip, get_all_ip_addresses, get_candidate_interfaces, get_vm_host_override
 from .qr_utils import print_qr_banner
 from .cert_utils import generate_self_signed_cert
 from .config_store import ConfigStore
-from .key_listener import wait_for_cancel
+from .key_listener import wait_for_cancel, check_double_ctrl_c
 
 DATA_DIR = Path(__file__).absolute().parent.parent.parent / "data"
 CERT_FILE = DATA_DIR / "cert.pem"
 KEY_FILE = DATA_DIR / "key.pem"
 
-console = Console(legacy_windows=False)
+console = Console()
 
-class ReusableHTTPServer(http.server.HTTPServer):
+class ReusableHTTPServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
+    daemon_threads = True
 
 def find_available_port(start_port: int, max_tries: int = 50, exclude_ports: Optional[Set[int]] = None) -> int:
     """Find an available TCP port on 0.0.0.0 starting from start_port."""
@@ -304,18 +305,71 @@ HTML_PAGE = """<!DOCTYPE html>
 """
 
 class UnifiedSetupServer:
-    def __init__(self, http_port: int = 8080, https_port: int = 8443, ip: Optional[str] = None):
+    def __init__(self, http_port: int = 8080, https_port: int = 8443, ip: Optional[str] = None, interactive: bool = True):
         self.http_port = http_port
         self.https_port = https_port
-        self.ip = ip or get_best_local_ip()
         self.config_store = ConfigStore()
         self.stop_event = threading.Event()
+        
+        # Determine IP address
+        if ip:
+            self.ip = ip
+        else:
+            self.ip = self._select_interface(interactive)
         
         # FRESH SESSION: ALWAYS False on start of item [1]!
         self.has_url = False
         self.has_headers = False
         self.received_url = None
         self.received_headers = None
+
+    def _select_interface(self, interactive: bool) -> str:
+        candidates = get_candidate_interfaces()
+        if not candidates:
+            return "127.0.0.1"
+
+        # If override is active or non-interactive or only 1 candidate, use it directly
+        if not interactive or not sys.stdin or not hasattr(sys.stdin, "isatty") or not sys.stdin.isatty():
+            return candidates[0]["ip"]
+        if get_vm_host_override() or len(candidates) == 1:
+            return candidates[0]["ip"]
+
+        best_ip = candidates[0]["ip"]
+        best_name = candidates[0]["name"]
+
+        console.print("\n[bold cyan]Обнаружены сетевые интерфейсы:[/bold cyan]")
+        for idx, c in enumerate(candidates, 1):
+            virt_tag = " [dim red](VPN/Виртуальный)[/dim red]" if c["is_virtual"] else ""
+            rec_tag = " [bold green][Рекомендуется][/bold green]" if idx == 1 else ""
+            console.print(f"  [{idx}] [bold white]{c['ip']:<15}[/bold white] — [cyan]{c['name']}[/cyan]{virt_tag}{rec_tag}")
+
+        prompt = f"\nИспользовать [bold green]{best_ip}[/bold green] ({best_name})? [Y/n/1-{len(candidates)}/q-назад]: "
+        console.print(prompt, end="", highlight=False)
+        sys.stdout.flush()
+
+        try:
+            raw = input().strip()
+            if not raw or raw.lower() in ("y", "yes", "д", "да"):
+                return best_ip
+            if raw.lower() in ("q", "й", "0", "back", "назад", "exit"):
+                return None
+            if raw.isdigit():
+                val = int(raw)
+                if 1 <= val <= len(candidates):
+                    return candidates[val - 1]["ip"]
+            if raw.lower() in ("n", "no", "н", "нет"):
+                custom = input("Введите IP адрес ПК вручную (или 'q' для возврата): ").strip()
+                if custom.lower() in ("q", "й", "back"):
+                    return None
+                if custom:
+                    return custom
+        except KeyboardInterrupt:
+            check_double_ctrl_c()
+            return None
+        except EOFError:
+            return None
+
+        return best_ip
 
     def log(self, level: str, msg: str):
         now = time.strftime("%H:%M:%S")
@@ -440,6 +494,10 @@ class UnifiedSetupServer:
         self.stop_event.set()
 
     def run(self):
+        if not self.ip:
+            console.print("\n[yellow]Настройка отменена. Возврат в главное меню...[/yellow]")
+            return False
+
         # 1. Certificate check
         all_ips = list(set(get_all_ip_addresses() + [self.ip]))
         if not CERT_FILE.exists() or not KEY_FILE.exists():
@@ -479,7 +537,7 @@ class UnifiedSetupServer:
         console.print("\n" + "=" * 62)
         console.print("       ЕДИНАЯ НАСТРОЙКА: ССЫЛКА + СЕРТИФИКАТ + КЛИЕНТ")
         console.print("=" * 62 + "\n")
-        print_qr_banner("ОТСКАНИРУЙТЕ QR-КОД КАМЕРОЙ ТЕЛЕФОНА", setup_url)
+        print_qr_banner("ОТСКАНИРУЙТЕ QR-КОД КАМЕРОЙ ТЕЛЕФОНА", setup_url, save_path=DATA_DIR / "qr_setup.png")
         console.print(f"Адрес: [bold cyan]{setup_url}[/bold cyan]")
         console.print("Отсканируйте код. На странице вставьте ссылку и обновите профиль в клиенте.\n")
         console.print("[dim]Нажмите [bold yellow]q[/bold yellow] для возврата в главное меню | [bold red]Ctrl+C[/bold red] для выхода из программы[/dim]\n")

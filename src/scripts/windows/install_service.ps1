@@ -1,4 +1,4 @@
-﻿# Registers VPN Spoof background proxy in Windows User Startup (no admin rights needed)
+# Registers VPN Spoof background proxy in Windows User Startup (no admin rights needed)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $taskName = "VPNSpoofProxy"
@@ -31,7 +31,16 @@ try {
     Write-Host "[-] Ошибка настройки автозапуска: $_" -ForegroundColor Red
 }
 
-# 3. Запуск фоновой службы прямо сейчас
+# 3. Остановка старых процессов перед новым запуском
+try {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { 
+        $_.CommandLine -like "*main.py*proxy*" 
+    } | ForEach-Object { 
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+} catch {}
+
+# 4. Запуск фоновой службы прямо сейчас
 Write-Host "[*] Запуск фоновой службы прокси..." -ForegroundColor Cyan
 Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`"" -WorkingDirectory $repoDir
 

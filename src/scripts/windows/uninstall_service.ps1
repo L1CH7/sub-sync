@@ -1,4 +1,4 @@
-﻿[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $taskName = "VPNSpoofProxy"
 Write-Host "[*] Остановка и удаление автозапуска $taskName..." -ForegroundColor Yellow
@@ -24,7 +24,7 @@ try {
 try {
     $killed = $false
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { 
-        $_.CommandLine -like "*main.py proxy*" 
+        $_.CommandLine -like "*main.py*proxy*" 
     } | ForEach-Object { 
         Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
         $killed = $true

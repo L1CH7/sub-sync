@@ -11,11 +11,16 @@ End If
 
 WshShell.CurrentDirectory = repoDir
 
-' Ensure user local bin is in PATH for uv
-userProfile = WshShell.ExpandEnvironmentStrings("%USERPROFILE%")
-localBin = userProfile & "\.local\bin"
-currentPath = WshShell.Environment("PROCESS")("PATH")
-WshShell.Environment("PROCESS")("PATH") = localBin & ";" & currentPath
+' Prefer pythonw from .venv for true silent execution without cmd wrapper
+pythonwExe = repoDir & "\.venv\Scripts\pythonw.exe"
+If fso.FileExists(pythonwExe) Then
+    cmd = """" & pythonwExe & """ main.py proxy"
+Else
+    userProfile = WshShell.ExpandEnvironmentStrings("%USERPROFILE%")
+    localBin = userProfile & "\.local\bin"
+    currentPath = WshShell.Environment("PROCESS")("PATH")
+    WshShell.Environment("PROCESS")("PATH") = localBin & ";" & currentPath
+    cmd = "cmd /c uv run main.py proxy"
+End If
 
-cmd = "cmd /c uv run main.py proxy"
 WshShell.Run cmd, 0, False
