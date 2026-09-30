@@ -1,4 +1,6 @@
+﻿[Console]::InputEncoding  = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding           = [System.Text.Encoding]::UTF8
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoDir = (Get-Item "$scriptDir\..\..\..").FullName
@@ -69,17 +71,17 @@ try {
 
 if ($portOwnerPid) {
     if ($isProxyRunning -and ($proxyPids -contains $portOwnerPid)) {
-        Write-Host "[+] Порт $port`: АКТИВЕН (Служба proxy принимает подключения)" -ForegroundColor Green
+        Write-Host "[+] Порт $port - АКТИВЕН (Служба proxy принимает подключения)" -ForegroundColor Green
         Write-Host "[*] Эндпоинт подписки: http://127.0.0.1:$port/sub" -ForegroundColor White
     } else {
-        Write-Host "[!] Порт $port`: ЗАНЯТ другим процессом (${portOwnerName}, PID: ${portOwnerPid})" -ForegroundColor Red
+        Write-Host "[!] Порт $port - ЗАНЯТ другим процессом ($portOwnerName, PID: $portOwnerPid)" -ForegroundColor Red
         Write-Host "    (Для работы службы требуется освободить порт $port)" -ForegroundColor DarkGray
     }
 } else {
     if ($isProxyRunning) {
-        Write-Host "[!] Порт $port`: НЕ ОТКРЫТ (хотя процесс запущен - возможен сбой при старте)" -ForegroundColor Red
+        Write-Host "[!] Порт $port - НЕ ОТКРЫТ (хотя процесс запущен - возможен сбой при старте)" -ForegroundColor Red
     } else {
-        Write-Host "[i] Порт $port`: СВОБОДЕН (служба выключена)" -ForegroundColor Gray
+        Write-Host "[i] Порт $port - СВОБОДЕН (служба выключена)" -ForegroundColor Gray
     }
 }
 

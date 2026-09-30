@@ -1,4 +1,4 @@
-# PowerShell Setup & Launcher for Windows
+﻿# PowerShell Setup & Launcher for Windows
 $ErrorActionPreference = "Stop"
 
 # UTF-8 Console Support
@@ -36,7 +36,9 @@ if (-not $uvCmd -and -not (Test-Path $localUv)) {
 }
 
 # 2. Настройка брандмауэра Windows (порты для связи с телефоном)
-New-NetFirewallRule -DisplayName "VPN-Spoof-Ports" -Direction Inbound -LocalPort 8080,8443,54321 -Protocol TCP -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null
+try {
+    New-NetFirewallRule -DisplayName "VPN-Spoof-Ports" -Direction Inbound -LocalPort 8080,8443,54321 -Protocol TCP -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null
+} catch {}
 
 # 3. Первичная настройка зависимостей
 if (-not (Test-Path ".venv")) {

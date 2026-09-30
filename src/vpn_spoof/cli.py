@@ -122,46 +122,33 @@ def show_menu():
     )
     console.print(Panel(menu, title="[bold]Меню действий[/bold]", border_style="bright_blue", box=box.ASCII))
 
+def run_service_script(script_name: str):
+    repo_dir = Path(__file__).absolute().parent.parent.parent
+    if sys.platform == "win32":
+        ps_script = (repo_dir / "src" / "scripts" / "windows" / f"{script_name}.ps1").resolve()
+        # Direct Unicode process invocation bypassing cmd.exe to preserve Cyrillic paths
+        cmd = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)]
+        subprocess.run(cmd)
+    else:
+        sh_script = (repo_dir / "src" / "scripts" / "linux" / f"{script_name}.sh").resolve()
+        subprocess.run(["bash", str(sh_script)])
+
 def install_service_action():
     clear_screen()
-    repo_dir = Path(__file__).absolute().parent.parent.parent
     console.print("[bold cyan]Установка фоновой службы автозапуска...[/bold cyan]\n")
-
-    if sys.platform == "win32":
-        ps_script = repo_dir / "src" / "scripts" / "windows" / "install_service.ps1"
-        os.system(f'powershell -ExecutionPolicy Bypass -File "{ps_script}"')
-    else:
-        sh_script = repo_dir / "src" / "scripts" / "linux" / "install_service.sh"
-        os.system(f'bash "{sh_script}"')
-
+    run_service_script("install_service")
     wait_key()
 
 def status_service_action():
     clear_screen()
-    repo_dir = Path(__file__).absolute().parent.parent.parent
     console.print("[bold cyan]Проверка статуса службы...[/bold cyan]\n")
-
-    if sys.platform == "win32":
-        ps_script = repo_dir / "src" / "scripts" / "windows" / "status_service.ps1"
-        os.system(f'powershell -ExecutionPolicy Bypass -File "{ps_script}"')
-    else:
-        sh_script = repo_dir / "src" / "scripts" / "linux" / "status_service.sh"
-        os.system(f'bash "{sh_script}"')
-
+    run_service_script("status_service")
     wait_key()
 
 def uninstall_service_action():
     clear_screen()
-    repo_dir = Path(__file__).absolute().parent.parent.parent
     console.print("[bold yellow]Удаление фоновой службы...[/bold yellow]\n")
-
-    if sys.platform == "win32":
-        ps_script = repo_dir / "src" / "scripts" / "windows" / "uninstall_service.ps1"
-        os.system(f'powershell -ExecutionPolicy Bypass -File "{ps_script}"')
-    else:
-        sh_script = repo_dir / "src" / "scripts" / "linux" / "uninstall_service.sh"
-        os.system(f'bash "{sh_script}"')
-
+    run_service_script("uninstall_service")
     wait_key()
 
 def service_menu():

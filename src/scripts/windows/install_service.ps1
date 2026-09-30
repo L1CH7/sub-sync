@@ -1,5 +1,7 @@
-# Registers VPN Spoof background proxy in Windows User Startup (no admin rights needed)
+﻿# Registers VPN Spoof background proxy in Windows User Startup (no admin rights needed)
+[Console]::InputEncoding  = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding           = [System.Text.Encoding]::UTF8
 
 $taskName = "VPNSpoofProxy"
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
