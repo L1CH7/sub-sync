@@ -15,7 +15,31 @@
 
 ---
 
-## Быстрый запуск
+## Быстрая установка и обновление
+
+### Linux / macOS
+```bash
+curl -fsSL https://raw.githubusercontent.com/L1CH7/sub-sync/master/scripts/install/install.sh | bash
+```
+
+С переопределением каталога, порта или имени службы (например, для тестового запуска):
+```bash
+curl -fsSL https://raw.githubusercontent.com/L1CH7/sub-sync/master/scripts/install/install.sh | bash -s -- --dir ~/sub-sync-test --port 54322 --service-name subsync-test.service
+```
+
+### Windows (PowerShell)
+```powershell
+irm https://raw.githubusercontent.com/L1CH7/sub-sync/master/scripts/install/install.ps1 | iex
+```
+
+С параметрами для изолированной установки:
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/L1CH7/sub-sync/master/scripts/install/install.ps1))) -Dir "$env:LOCALAPPDATA\sub-sync-test" -Port 54322 -ServiceName SubSyncTest
+```
+
+Установщик сам определяет ранее установленный экземпляр (включая старые версии без `VERSION`), сохраняет `data/`, обновляет код и перенастраивает службу автозапуска.
+
+## Локальный запуск из клона репозитория
 
 ### Windows
 Запустите `setup.cmd` двойным кликом в Проводнике или выполните в PowerShell:
@@ -28,7 +52,7 @@
 ./setup.sh
 ```
 
-Менеджер окружения `uv` проверяется и устанавливается автоматически при первом запуске.
+Менеджер окружения `uv` проверяется и устанавливается автоматически при первом запуске. Подробное руководство по мульти-подпискам, Clash Verge Rev, каскадам и диагностике ТСПУ (`uv run main.py check`) см. в [SETUP_GUIDE.md](SETUP_GUIDE.md).
 
 ---
 
@@ -55,6 +79,7 @@
  [2] Управление службой автозапуска (установка, статус, удаление)
  [3] Проверить работу прокси в консоли
  [4] Перенос конфигурации (экспорт / импорт / файл config.json)
+ [5] Проверка ТСПУ / DPI (подписка, DNS, каскад)
  [r] Сбросить настройки
  [q] Выход
 ```
@@ -76,12 +101,18 @@ data/config.json
 ```text
 subsync/
 ├── README.md                   # Документация
-├── setup.cmd                   # Запуск на Windows (Explorer)
-├── setup.ps1                   # Запуск на Windows (PowerShell)
-├── setup.sh                    # Запуск на Linux / macOS
+├── SETUP_GUIDE.md              # Настройка Clash Verge Rev, мульти-подписок и диагностики ТСПУ
+├── VERSION                     # Текущая версия для авто-обновления
+├── setup.cmd                   # Локальный запуск на Windows (Explorer)
+├── setup.ps1                   # Локальный запуск на Windows (PowerShell)
+├── setup.sh                    # Локальный запуск на Linux / macOS
 ├── main.py                     # Точка входа
 ├── pyproject.toml              # Зависимости проекта
 ├── .gitignore                  # Исключение локальных секретов
-├── src/                        # Исходный код модулей и скриптов
+├── scripts/
+│   ├── install/                # Удалённые/локальные установщики (install.sh / install.ps1)
+│   └── service/                # Скрипты служб автозапуска (linux / windows)
+├── src/                        # Исходный код модулей
+├── tests/                      # Автотесты
 └── data/                       # Локальные данные (конфигурация)
 ```

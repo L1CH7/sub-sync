@@ -1,20 +1,40 @@
 #!/usr/bin/env bash
-SERVICE_NAME="vpn-spoof.service"
-DESKTOP_NAME="vpn-spoof.desktop"
-
+SERVICE_NAME="${SUBSYNC_SERVICE_NAME:-vpn-spoof.service}"
+PORT=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dir)
+            REPO_DIR="$(cd "$2" && pwd)"
+            shift 2
+            ;;
+        --port)
+            PORT="$2"
+            shift 2
+            ;;
+        --service-name)
+            SERVICE_NAME="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+[[ "$SERVICE_NAME" == *.service ]] || SERVICE_NAME="${SERVICE_NAME}.service"
+DESKTOP_NAME="${SERVICE_NAME%.service}.desktop"
 CFG_FILE="$REPO_DIR/data/config.json"
-PORT=54321
-if [ -f "$CFG_FILE" ]; then
-    CFG_PORT=$(grep -o '"listen_port": *[0-9]*' "$CFG_FILE" 2>/dev/null | grep -o '[0-9]*')
-    if [ -n "$CFG_PORT" ]; then
-        PORT="$CFG_PORT"
-    fi
+
+if [ -z "$PORT" ] && [ -f "$CFG_FILE" ]; then
+    PORT="$(grep -o '"listen_port": *[0-9]*' "$CFG_FILE" 2>/dev/null | head -n1 | grep -o '[0-9]*' || true)"
 fi
+PORT="${PORT:-54321}"
 
 echo "=========================================="
-echo "      СТАТУС СЛУЖБЫ VPN SPOOF PROXY      "
+echo "      СТАТУС СЛУЖБЫ SUBSYNC ($SERVICE_NAME)"
 echo "=========================================="
 
 HAS_AUTOSTART=false
@@ -37,7 +57,10 @@ if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
     echo -e "\033[32m[+] Служба systemd --user: АКТИВНА (running)\033[0m"
 fi
 
-PIDS=$(pgrep -f "[m]ain.py proxy" 2>/dev/null || true)
+PIDS=$(pgrep -f -- "--config $CFG_FILE" 2>/dev/null || true)
+if [ -z "$PIDS" ] && [ "$SERVICE_NAME" = "vpn-spoof.service" ]; then
+    PIDS=$(pgrep -f "[m]ain.py proxy" 2>/dev/null || true)
+fi
 if [ -n "$PIDS" ]; then
     echo -e "\033[32m[+] Процесс main.py proxy: РАБОТАЕТ (PID: $PIDS)\033[0m"
 else

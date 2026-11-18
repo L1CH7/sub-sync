@@ -135,12 +135,12 @@ def show_menu():
 def run_service_script(script_name: str):
     repo_dir = Path(__file__).absolute().parent.parent.parent
     if sys.platform == "win32":
-        ps_script = (repo_dir / "src" / "scripts" / "windows" / f"{script_name}.ps1").resolve()
+        ps_script = (repo_dir / "scripts" / "service" / "windows" / f"{script_name}.ps1").resolve()
         # Direct Unicode process invocation bypassing cmd.exe to preserve Cyrillic paths
         cmd = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)]
         subprocess.run(cmd)
     else:
-        sh_script = (repo_dir / "src" / "scripts" / "linux" / f"{script_name}.sh").resolve()
+        sh_script = (repo_dir / "scripts" / "service" / "linux" / f"{script_name}.sh").resolve()
         subprocess.run(["bash", str(sh_script)])
 
 def install_service_action():
