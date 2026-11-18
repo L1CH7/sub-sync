@@ -2,6 +2,7 @@ import sys
 import os
 import time
 import subprocess
+import json
 from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
@@ -14,6 +15,14 @@ from .unified_setup import UnifiedSetupServer
 from .proxy_service import SpoofProxyServer
 from .bundle_transfer import BundleTransfer
 from .config_store import ConfigStore
+from .dpi_check import (
+    check_dns_hijack,
+    detect_physical_source_ip,
+    load_targets_from_store,
+    parse_socks5_proxy,
+    run_batch_diagnostics,
+    run_cdn_tcp16_check,
+)
 from .net_utils import get_best_local_ip
 
 console = Console()
@@ -117,6 +126,7 @@ def show_menu():
         " [2] Управление службой автозапуска (установка, статус, удаление)\n"
         " [3] Проверить работу прокси в консоли\n"
         " [4] Перенос конфигурации (экспорт / импорт / файл config.json)\n"
+        " [5] Проверка ТСПУ / DPI (подписка, DNS, каскад)\n"
         " [bold red]\\[r][/bold red] Сбросить настройки\n"
         " [bold yellow]\\[q][/bold yellow] Выход"
     )
@@ -244,6 +254,209 @@ def bundle_action():
                     console.print(f"\n[bold red][FAIL] Ошибка импорта:[/bold red] {e}")
             wait_key()
 
+def _badge(verdict: str) -> str:
+    styles = {
+        "CLEAN": "[bold green]OK[/bold green]",
+        "FROZEN": "[bold red]BLOCK[/bold red]",
+        "BLOCKED": "[bold red]BLOCK[/bold red]",
+        "BLOCKED_ALL": "[bold red]BLOCK[/bold red]",
+        "WHITELIST_SNI": "[bold red]SNI-WL[/bold red]",
+        "SPOOFED": "[bold red]SPOOF[/bold red]",
+        "CONN_ERR": "[yellow]ERR[/yellow]",
+        "TLS_ERR": "[yellow]TLS[/yellow]",
+        "DNS_ERR": "[red]DNS[/red]",
+        "PARTIAL": "[yellow]PART[/yellow]",
+        "WARN": "[yellow]WARN[/yellow]",
+        "INCON": "[yellow]?[/yellow]",
+        "SKIPPED": "[dim]-[/dim]",
+    }
+    return styles.get(verdict, verdict)
+
+
+def render_dpi_results(results: list[dict], title: str = "Результаты проверки ТСПУ / DPI"):
+    table = Table(title=title, box=box.ASCII, show_lines=False)
+    table.add_column("Узел / Хост", style="cyan", overflow="fold")
+    table.add_column("Порт", justify="right", width=5)
+    table.add_column("16-20KB", justify="center", width=7)
+    table.add_column("Burst", justify="center", width=7)
+    table.add_column("SNI", justify="center", width=7)
+    table.add_column("DNS", justify="center", width=7)
+    table.add_column("Итог", justify="center", width=7)
+
+    clean_cnt = 0
+    for item in results:
+        if item.get("verdict") == "CLEAN":
+            clean_cnt += 1
+        label = item.get("label") or item.get("host", "")
+        host = item.get("host", "")
+        name_col = f"{label}\n[dim]{host}[/dim]" if label != host else host
+        table.add_row(
+            name_col,
+            str(item.get("port", 443)),
+            _badge(item["l4_25"]["v"]),
+            _badge(item["siberian"]["v"]),
+            _badge(item["sni"]["v"]),
+            _badge(item["dns"]["v"]),
+            _badge(item["verdict"]),
+        )
+    console.print(table)
+    console.print(f"[bold]Итого доступно без ограничений:[/bold] {clean_cnt}/{len(results)}")
+
+
+def render_cdn_results(report: dict):
+    table = Table(title="Срез TCP 16-20KB по CDN / хостингам", box=box.ASCII, show_lines=False)
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("ASN", no_wrap=True)
+    table.add_column("Провайдер", overflow="fold")
+    table.add_column("Адрес", overflow="fold")
+    table.add_column("Статус", justify="center", no_wrap=True)
+    table.add_column("Детали", overflow="fold")
+
+    for row in report["rows"]:
+        table.add_row(
+            row["id"],
+            row["asn"],
+            row["provider"],
+            f"{row['ip']}:{row['port']}",
+            _badge(row["status"]),
+            row["detail"],
+        )
+    console.print(table)
+    console.print(
+        f"[bold]Прошло 16-20KB:[/bold] {report['ok']}/{report['total']}  "
+        f"[dim](источник базы: {report['catalog_source']})[/dim]"
+    )
+
+
+def dpi_check_menu(config_store: ConfigStore):
+    while True:
+        clear_screen()
+        phys_ip = detect_physical_source_ip()
+        info = (
+            f"Физический интерфейс (авто-обход TUN): [bold cyan]{phys_ip or 'по умолчанию'}[/bold cyan]\n"
+            f"Кэш внешних списков хранится только в системном кэше вне репозитория."
+        )
+        console.print(Panel(info, title="[bold]ПРОВЕРКА ТСПУ / DPI[/bold]", border_style="bright_blue", box=box.ASCII))
+        menu_text = (
+            " [1] Проверить узлы текущей подписки (напрямую, авто-обход TUN)\n"
+            " [2] Проверить узлы или сайт через локальный SOCKS5-прокси\n"
+            " [3] Срез TCP 16-20KB по CDN + проверка подмены DNS\n"
+            " [4] Проверить произвольный хост или домен\n"
+            " [bold yellow]\\[q][/bold yellow] Назад в главное меню"
+        )
+        console.print(Panel(menu_text, title="[bold]Режим диагностики[/bold]", border_style="bright_blue", box=box.ASCII))
+        console.print("\nВыберите пункт > ", end="", highlight=False)
+        sys.stdout.flush()
+        try:
+            choice = get_key()
+            console.print(choice)
+        except EOFError:
+            break
+
+        if choice in ["q", "0"]:
+            break
+        elif choice == "1":
+            clear_screen()
+            console.print("[bold cyan]Загрузка узлов подписки и параллельная проверка ТСПУ...[/bold cyan]")
+            try:
+                targets = load_targets_from_store(config_store)
+                if not targets:
+                    console.print("[yellow]Подписки в data/config.json не настроены.[/yellow]")
+                else:
+                    results = run_batch_diagnostics(targets, source_ip=phys_ip)
+                    render_dpi_results(results, title=f"Узлы подписки (через {phys_ip or 'маршрут по умолчанию'})")
+            except Exception as exc:
+                console.print(f"[bold red]Ошибка проверки:[/bold red] {exc}")
+            wait_key()
+        elif choice == "2":
+            clear_screen()
+            proxy_str = input("SOCKS5-прокси [127.0.0.1:7897]: ").strip() or "127.0.0.1:7897"
+            target_str = input("Хост/домен (Enter — узлы из подписки + youtube.com): ").strip()
+            try:
+                socks_proxy = parse_socks5_proxy(proxy_str)
+                targets = [t.strip() for t in target_str.split(",") if t.strip()] if target_str else (
+                    load_targets_from_store(config_store) + [{"host": "www.youtube.com", "port": 443, "label": "youtube.com"}]
+                )
+                console.print(f"[bold cyan]Проверка через {proxy_str}...[/bold cyan]")
+                results = run_batch_diagnostics(targets, socks_proxy=socks_proxy)
+                render_dpi_results(results, title=f"Через SOCKS5 {proxy_str}")
+            except Exception as exc:
+                console.print(f"[bold red]Ошибка проверки:[/bold red] {exc}")
+            wait_key()
+        elif choice == "3":
+            clear_screen()
+            console.print("[bold cyan]Проверка подмены DNS для youtube.com и среза TCP 16-20KB...[/bold cyan]")
+            try:
+                dns_res = check_dns_hijack("youtube.com", source_ip=phys_ip)
+                console.print(f"DNS youtube.com: {_badge(dns_res['v'])} ({dns_res['d']})")
+                for rname, rval, rtag in dns_res["rows"]:
+                    console.print(f"  {rname:<12} {rval:<24} {rtag}")
+                cdn_rep = run_cdn_tcp16_check(source_ip=phys_ip)
+                render_cdn_results(cdn_rep)
+            except Exception as exc:
+                console.print(f"[bold red]Ошибка проверки:[/bold red] {exc}")
+            wait_key()
+        elif choice == "4":
+            clear_screen()
+            raw = input("Введите host, host:port или URL: ").strip()
+            if raw:
+                console.print(f"[bold cyan]Проверка {raw}...[/bold cyan]")
+                results = run_batch_diagnostics([raw], source_ip=phys_ip)
+                render_dpi_results(results)
+            wait_key()
+
+
+def run_check_cli(args):
+    store = ConfigStore(Path(args.config)) if args.config else ConfigStore()
+    socks_proxy = parse_socks5_proxy(args.socks) if args.socks else None
+    if socks_proxy is not None:
+        source_ip = None
+    elif args.source_ip:
+        source_ip = args.source_ip
+    elif args.no_bypass_tun:
+        source_ip = None
+    else:
+        source_ip = detect_physical_source_ip()
+
+    if args.cdn:
+        report = run_cdn_tcp16_check(
+            allow_download=not args.no_download,
+            source_ip=source_ip,
+            socks_proxy=socks_proxy,
+            timeout=args.timeout,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            render_cdn_results(report)
+        return
+
+    targets: list = []
+    if args.host:
+        for entry in args.host:
+            targets.extend([item.strip() for item in entry.split(",") if item.strip()])
+    else:
+        targets = load_targets_from_store(store, timeout=args.timeout)
+
+    if not targets:
+        console.print("[yellow]Нет целей для проверки: передайте --host или настройте config.json.[/yellow]")
+        sys.exit(1)
+
+    results = run_batch_diagnostics(
+        targets,
+        source_ip=source_ip,
+        socks_proxy=socks_proxy,
+        timeout=args.timeout,
+        include_siberian=not args.no_siberian,
+    )
+    if args.json:
+        print(json.dumps(results, ensure_ascii=False, indent=2))
+    else:
+        mode = f"SOCKS5 {args.socks}" if args.socks else (f"IP {source_ip}" if source_ip else "маршрут по умолчанию")
+        render_dpi_results(results, title=f"Проверка ТСПУ / DPI ({mode})")
+
+
 def interactive_loop():
     config_store = ConfigStore()
     while True:
@@ -286,6 +499,9 @@ def interactive_loop():
         elif choice == "4":
             bundle_action()
 
+        elif choice == "5":
+            dpi_check_menu(config_store)
+
         elif choice == "r":
             console.print("\nСбросить конфигурацию? ([bold red]y[/bold red]/[bold green]N[/bold green]): ", end="", highlight=False)
             sys.stdout.flush()
@@ -306,7 +522,22 @@ def main():
             parser = argparse.ArgumentParser(description="VPN Spoof CLI")
             subparsers = parser.add_subparsers(dest="command")
             subparsers.add_parser("setup", help="Run unified phone setup server")
-            subparsers.add_parser("proxy", help="Run proxy daemon")
+            proxy_p = subparsers.add_parser("proxy", help="Run proxy daemon")
+            proxy_p.add_argument("--port", type=int, default=None, help="Переопределить порт прослушивания")
+            proxy_p.add_argument("--host", type=str, default="127.0.0.1", help="Переопределить адрес прослушивания")
+            proxy_p.add_argument("--config", type=str, default=None, help="Путь к альтернативному config.json")
+            check_p = subparsers.add_parser("check", help="Лёгкая проверка ТСПУ / DPI")
+            check_p.add_argument("--host", action="append", default=None, help="Хост, host:port или список через запятую")
+            check_p.add_argument("--config", type=str, default=None, help="Путь к config.json с подписками")
+            check_p.add_argument("--socks", type=str, default=None, help="Проверить через SOCKS5 (напр. 127.0.0.1:7897)")
+            check_p.add_argument("--source-ip", type=str, default=None, help="Явный исходящий IPv4 интерфейса")
+            check_p.add_argument("--no-bypass-tun", action="store_true", help="Не обходить активный TUN автоматически")
+            check_p.add_argument("--cdn", action="store_true", help="Проверить срез TCP 16-20KB по локально кэшированной базе CDN")
+            check_p.add_argument("--limit", type=int, default=None, help="Ограничить число целей в --cdn")
+            check_p.add_argument("--no-download", action="store_true", help="Не скачивать внешнюю базу tcp16.json")
+            check_p.add_argument("--no-siberian", action="store_true", help="Пропустить тест параллельных TLS-сессий")
+            check_p.add_argument("--timeout", type=float, default=5.0, help="Таймаут сетевых проверок в секундах")
+            check_p.add_argument("--json", action="store_true", help="Вывести результат в JSON")
             subparsers.add_parser("export", help="Export bundle")
             import_p = subparsers.add_parser("import", help="Import bundle")
             import_p.add_argument("bundle", nargs="?")
@@ -318,7 +549,10 @@ def main():
             if args.command == "setup":
                 UnifiedSetupServer().run()
             elif args.command == "proxy":
-                SpoofProxyServer().run()
+                store = ConfigStore(Path(args.config)) if args.config else None
+                SpoofProxyServer(listen_port=args.port, host=args.host, config_store=store).run()
+            elif args.command == "check":
+                run_check_cli(args)
             elif args.command == "export":
                 BundleTransfer().print_export_qr()
             elif args.command == "import":
