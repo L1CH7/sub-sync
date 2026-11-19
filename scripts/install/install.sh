@@ -112,6 +112,47 @@ detect_existing_dir() {
     return 1
 }
 
+nearest_existing_ancestor() {
+    local p="$1"
+    while [ ! -e "$p" ]; do
+        local parent
+        parent="$(dirname "$p")"
+        [ "$parent" = "$p" ] && break
+        p="$parent"
+    done
+    echo "$p"
+}
+
+run_priv() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+        return
+    fi
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo "[-] Недостаточно прав для $TARGET_DIR, а утилита sudo не найдена."
+        exit 1
+    fi
+    sudo "$@"
+}
+
+ensure_writable_target_dir() {
+    local target="$1"
+    if [ ! -d "$target" ]; then
+        local ancestor
+        ancestor="$(nearest_existing_ancestor "$target")"
+        if [ -w "$ancestor" ]; then
+            mkdir -p "$target"
+        else
+            echo "[*] Каталог $(dirname "$target") требует прав администратора — запрашиваю sudo..."
+            run_priv mkdir -p "$target"
+            run_priv chown -R "$(id -un):$(id -gn)" "$target"
+        fi
+    elif [ ! -w "$target" ]; then
+        echo "[*] Каталог $target недоступен на запись — передаю права пользователю $(id -un) через sudo..."
+        run_priv chown -R "$(id -un):$(id -gn)" "$target"
+    fi
+}
+
 if [ -z "$TARGET_DIR" ]; then
     if EXISTING_DIR="$(detect_existing_dir)"; then
         TARGET_DIR="$EXISTING_DIR"
@@ -120,8 +161,10 @@ if [ -z "$TARGET_DIR" ]; then
     fi
 fi
 
-mkdir -p "$(dirname "$TARGET_DIR")"
-TARGET_DIR="$(cd "$(dirname "$TARGET_DIR")" && pwd)/$(basename "$TARGET_DIR")"
+[[ "$TARGET_DIR" == /* ]] || TARGET_DIR="$PWD/$TARGET_DIR"
+while [ "$TARGET_DIR" != "/" ] && [[ "$TARGET_DIR" == */ ]]; do
+    TARGET_DIR="${TARGET_DIR%/}"
+done
 
 echo "=================================================="
 echo "  SubSync — установка и обновление"
@@ -223,7 +266,9 @@ cfg_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="ut
 PY
 fi
 
-# 6. Остановка старого экземпляра и атомарная замена каталога
+# 6. Проверка прав, остановка старого экземпляра и замена каталога
+ensure_writable_target_dir "$TARGET_DIR"
+
 if [ -f "$TARGET_DIR/scripts/service/linux/uninstall_service.sh" ]; then
     systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
 elif [ -f "$TARGET_DIR/src/scripts/linux/uninstall_service.sh" ]; then
@@ -231,8 +276,13 @@ elif [ -f "$TARGET_DIR/src/scripts/linux/uninstall_service.sh" ]; then
 fi
 pkill -f "--config $TARGET_DIR/data/config.json" 2>/dev/null || true
 
-rm -rf "$TARGET_DIR"
-mv "$STAGING_DIR" "$TARGET_DIR"
+if [ -w "$(dirname "$TARGET_DIR")" ]; then
+    rm -rf "$TARGET_DIR"
+    mv "$STAGING_DIR" "$TARGET_DIR"
+else
+    find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+    cp -a "$STAGING_DIR/." "$TARGET_DIR/"
+fi
 
 # 7. Установка зависимостей и запись версии/состояния
 echo "[*] Синхронизация Python-окружения (uv sync)..."

@@ -125,7 +125,72 @@ class TestSubSync(unittest.TestCase):
         self.assertEqual(configs[0]["remarks"], "WL Node")
         self.assertEqual(configs[1]["outbounds"][0]["protocol"], "hysteria")
 
-    def test_build_clash_yaml_preserves_info_and_has_no_auto_exit(self):
+    def test_build_clash_yaml_flat_layout_and_mlkem768(self):
+        extra_multi = {
+            "remarks": "🇩🇪 Germany Multi",
+            "outbounds": [
+                {
+                    "tag": "proxy",
+                    "protocol": "vless",
+                    "settings": {"vnext": [{"address": "de1.example.com", "port": 443, "users": [{"id": "111"}]}]},
+                    "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": "de1.example.com", "publicKey": "p", "shortId": "aa"}},
+                },
+                {
+                    "tag": "proxy-2",
+                    "protocol": "vless",
+                    "settings": {"vnext": [{"address": "de2.example.com", "port": 443, "users": [{"id": "111"}]}]},
+                    "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": "de2.example.com", "publicKey": "p2", "shortId": "bb"}},
+                },
+            ],
+        }
+        payloads = [
+            {
+                "id": "1",
+                "label": "main",
+                "configs": SAMPLE_XRAY_JSON + [extra_multi],
+                "headers": {"Subscription-Userinfo": "upload=0; download=1073741824; total=0; expire=0"},
+            },
+            {
+                "id": "2",
+                "label": "WL",
+                "configs": decode_xray_payload(
+                    b"vless://22222222-2222-2222-2222-222222222222@wl1.example.ru:443?type=tcp&security=reality&pbk=pk&sid=12#RU-WL"
+                ),
+                "headers": {"Subscription-Userinfo": "upload=0; download=0; total=10737418240; expire=0"},
+            },
+        ]
+        clash_cfg = {
+            "entry_subscription_ids": ["2"],
+            "entry_match": "Moscow",
+            "exclude_nodes": "Germany Multi",
+            "groups": [
+                {"name": "🇺🇸 США", "match": "USA", "bridge": True},
+                {"name": "🇷🇺 РФ", "match": "Moscow|\\[WL\\]", "bridge": False},
+            ],
+        }
+        yaml_text = build_clash_yaml(payloads, clash_cfg)
+        self.assertIn("⌛️Дней осталось: 183", yaml_text)
+        self.assertIn("Безлимит", yaml_text)
+        self.assertIn("Ост. 10.0/10.0 ГБ", yaml_text)
+        self.assertIn('name: "🌍 2. Выход (Сервер)"', yaml_text)
+        self.assertIn('name: "✈️ 1. Вход (Шаг 1)"', yaml_text)
+        self.assertIn('name: "⚡ Авто · Вход"', yaml_text)
+        self.assertIn("hidden: true", yaml_text)
+        self.assertIn("support-x25519mlkem768: true", yaml_text)
+        self.assertIn('client-fingerprint: "chrome"', yaml_text)
+        self.assertIn('dialer-proxy: "✈️ 1. Вход (Шаг 1)"', yaml_text)
+        self.assertIn("MATCH,🌍 2. Выход (Сервер)", yaml_text)
+        self.assertNotIn("Germany Multi", yaml_text)
+        self.assertNotIn("proxy-2", yaml_text)
+        self.assertNotIn("[Мост] ", yaml_text)
+
+        # Проверяем, что входные узлы (Moscow, WL) не дублируются в списке выхода
+        exit_section = yaml_text.split('name: "🌍 2. Выход (Сервер)"')[1].split('name: "✈️ 1. Вход (Шаг 1)"')[0]
+        self.assertIn("USA #1", exit_section)
+        self.assertNotIn("Moscow #1", exit_section)
+        self.assertNotIn("RU-WL", exit_section)
+
+    def test_build_clash_yaml_grouped_layout_preserves_info_and_has_no_auto_exit(self):
         payloads = [
             {
                 "id": "1",
@@ -143,6 +208,7 @@ class TestSubSync(unittest.TestCase):
             },
         ]
         clash_cfg = {
+            "layout": "grouped",
             "entry_subscription_ids": ["2"],
             "entry_match": "Moscow",
             "groups": [
@@ -155,7 +221,9 @@ class TestSubSync(unittest.TestCase):
         self.assertIn("Безлимит", yaml_text)
         self.assertIn("Ост. 10.0/10.0 ГБ", yaml_text)
         self.assertIn("⚡ Авто · Вход", yaml_text)
+        self.assertIn("hidden: true", yaml_text)
         self.assertIn("🌉 🇺🇸 США", yaml_text)
+        self.assertIn("🛡️ Режим", yaml_text)
         self.assertIn('dialer-proxy: "✈️ 1. Вход (Шаг 1)"', yaml_text)
         self.assertNotIn("Авто · США", yaml_text)
         self.assertNotIn("Авто · ВСЕ", yaml_text)

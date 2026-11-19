@@ -187,6 +187,7 @@ def decode_xray_payload(raw_bytes: bytes) -> List[Dict[str, Any]]:
 def extract_unique_nodes(
     subscriptions_payloads: List[Dict[str, Any]],
     prefix_merged_labels: bool = True,
+    include_extra_outbounds: bool = False,
 ) -> List[Dict[str, Any]]:
     """Извлекает дедуплицированный список узлов из всех подписок без фильтрации по странам."""
     nodes: List[Dict[str, Any]] = []
@@ -219,34 +220,41 @@ def extract_unique_nodes(
                 "outbound": primary,
             })
 
-    # Затем добавляем дополнительные уникальные узлы из мульти-аутбаунд профилей (без дублей)
-    for sub in subscriptions_payloads:
-        label = sub.get("label", sub.get("id", ""))
-        prefix = f"[{label}] " if (multi and prefix_merged_labels and label) else ""
-        for cfg in sub.get("configs", []):
-            rem = str(cfg.get("remarks", "")).strip()
-            proxy_obs = [
-                o for o in cfg.get("outbounds", [])
-                if (o.get("protocol") or o.get("type")) not in ("freedom", "blackhole", "dns", None)
-            ]
-            for extra in proxy_obs[1:]:
-                ep = _endpoint_key(extra)
-                if ep is None or (sub.get("id"), ep) in seen_endpoints:
-                    continue
-                seen_endpoints.add((sub.get("id"), ep))
-                tag = extra.get("tag", "alt")
-                node_name = _unique_name(f"{prefix}{rem} · {tag}", used_names)
-                nodes.append({
-                    "name": node_name,
-                    "sub_id": sub.get("id"),
-                    "sub_label": label,
-                    "tag": tag,
-                    "outbound": extra,
-                })
+    # Опционально добавляем дополнительные аутбаунды из мульти-аутбаунд профилей (без дублей)
+    if include_extra_outbounds:
+        for sub in subscriptions_payloads:
+            label = sub.get("label", sub.get("id", ""))
+            prefix = f"[{label}] " if (multi and prefix_merged_labels and label) else ""
+            for cfg in sub.get("configs", []):
+                rem = str(cfg.get("remarks", "")).strip()
+                proxy_obs = [
+                    o for o in cfg.get("outbounds", [])
+                    if (o.get("protocol") or o.get("type")) not in ("freedom", "blackhole", "dns", None)
+                ]
+                for extra in proxy_obs[1:]:
+                    ep = _endpoint_key(extra)
+                    if ep is None or (sub.get("id"), ep) in seen_endpoints:
+                        continue
+                    seen_endpoints.add((sub.get("id"), ep))
+                    tag = extra.get("tag", "alt")
+                    node_name = _unique_name(f"{prefix}{rem} · {tag}", used_names)
+                    nodes.append({
+                        "name": node_name,
+                        "sub_id": sub.get("id"),
+                        "sub_label": label,
+                        "tag": tag,
+                        "outbound": extra,
+                    })
     return nodes
 
 
-def outbound_to_clash_proxy(name: str, outbound: Dict[str, Any], dialer_proxy: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def outbound_to_clash_proxy(
+    name: str,
+    outbound: Dict[str, Any],
+    dialer_proxy: Optional[str] = None,
+    reality_mlkem768: bool = True,
+    reality_fingerprint: str = "chrome",
+) -> Optional[Dict[str, Any]]:
     """Преобразует Xray outbound в формат узла Clash/Mihomo."""
     proto = outbound.get("protocol") or outbound.get("type")
     ss = outbound.get("streamSettings", {})
@@ -287,11 +295,16 @@ def outbound_to_clash_proxy(name: str, outbound: Dict[str, Any], dialer_proxy: O
         if sec == "reality":
             rs = ss.get("realitySettings", {})
             p["servername"] = rs.get("serverName", addr)
-            p["reality-opts"] = {
+            reality_opts: Dict[str, Any] = {
                 "public-key": rs.get("publicKey", ""),
                 "short-id": rs.get("shortId", ""),
             }
-            if rs.get("fingerprint"):
+            if reality_mlkem768:
+                reality_opts["support-x25519mlkem768"] = True
+            p["reality-opts"] = reality_opts
+            if reality_mlkem768 and reality_fingerprint:
+                p["client-fingerprint"] = reality_fingerprint
+            elif rs.get("fingerprint"):
                 p["client-fingerprint"] = rs["fingerprint"]
         elif sec == "tls":
             ts = ss.get("tlsSettings", {})
@@ -389,10 +402,22 @@ def build_clash_yaml(
     subscriptions_payloads: List[Dict[str, Any]],
     clash_cfg: Dict[str, Any],
 ) -> str:
-    """Формирует конфигурацию Clash/Mihomo с настраиваемыми группами и каскадными мостами."""
+    """Формирует конфигурацию Clash/Mihomo в плоской (2 карточки) или групповой раскладке."""
     prefix_labels = bool(clash_cfg.get("prefix_merged_labels", True))
     show_limits = bool(clash_cfg.get("show_limits_in_merged", True))
-    nodes = extract_unique_nodes(subscriptions_payloads, prefix_merged_labels=prefix_labels)
+    layout = str(clash_cfg.get("layout", "flat")).lower()
+    include_extra = bool(clash_cfg.get("include_extra_outbounds", False))
+    exclude_nodes = str(clash_cfg.get("exclude_nodes", ""))
+    reality_mlkem768 = bool(clash_cfg.get("reality_mlkem768", True))
+    reality_fingerprint = str(clash_cfg.get("reality_fingerprint", "chrome"))
+
+    nodes = extract_unique_nodes(
+        subscriptions_payloads,
+        prefix_merged_labels=prefix_labels,
+        include_extra_outbounds=include_extra,
+    )
+    if exclude_nodes:
+        nodes = [n for n in nodes if not _match_regex(exclude_nodes, n["name"])]
 
     proxies: List[Dict[str, Any]] = []
     direct_names: List[str] = []
@@ -410,114 +435,177 @@ def build_clash_yaml(
                 info_proxy_names.append(iname)
 
     for n in nodes:
-        uname = _unique_name(n["name"], used_names)
-        n["name"] = uname
-        cp = outbound_to_clash_proxy(uname, n["outbound"])
-        if cp:
-            proxies.append(cp)
-            direct_names.append(uname)
+        n["name"] = _unique_name(n["name"], used_names)
 
     entry_group_name = clash_cfg.get("entry_group_name", "✈️ 1. Вход (Шаг 1)")
     entry_auto_name = clash_cfg.get("entry_auto_name", "⚡ Авто · Вход")
-    main_group_name = clash_cfg.get("main_group_name", "🛡️ Режим")
-    bridge_prefix = clash_cfg.get("bridge_node_prefix", "[Мост] ")
-    bridge_group_prefix = clash_cfg.get("bridge_group_prefix", "🌉 ")
     entry_match = clash_cfg.get("entry_match", "")
     entry_sub_ids = {str(x) for x in clash_cfg.get("entry_subscription_ids", [])}
 
     # Определяем входных кандидатов строго по конфигу (regex или ID подписки)
-    entry_candidates: List[str] = []
+    entry_candidates_raw: List[str] = [
+        n["name"]
+        for n in nodes
+        if (str(n["sub_id"]) in entry_sub_ids) or _match_regex(entry_match, n["name"])
+    ]
+    entry_set = set(entry_candidates_raw)
+    direct_only_match = str(clash_cfg.get("direct_only_match", ""))
+
     for n in nodes:
-        if n["name"] not in direct_names:
-            continue
-        if (str(n["sub_id"]) in entry_sub_ids) or _match_regex(entry_match, n["name"]):
-            entry_candidates.append(n["name"])
+        uname = n["name"]
+        dialer = None
+        if layout != "grouped" and entry_candidates_raw and (uname not in entry_set) and not _match_regex(direct_only_match, uname):
+            dialer = entry_group_name
+        cp = outbound_to_clash_proxy(
+            uname,
+            n["outbound"],
+            dialer_proxy=dialer,
+            reality_mlkem768=reality_mlkem768,
+            reality_fingerprint=reality_fingerprint,
+        )
+        if cp:
+            proxies.append(cp)
+            direct_names.append(uname)
 
-    # Клонируем узлы для каскада (dialer-proxy на Шаг 1), если заданы входные кандидаты
-    bridge_names: List[str] = []
-    bridge_map: Dict[str, str] = {}
-    if entry_candidates:
-        for p in list(proxies):
-            if p["name"] in info_proxy_names:
-                continue
-            bp = copy.deepcopy(p)
-            bname = _unique_name(f"{bridge_prefix}{p['name']}", used_names)
-            bp["name"] = bname
-            bp["dialer-proxy"] = entry_group_name
-            proxies.append(bp)
-            bridge_names.append(bname)
-            bridge_map[p["name"]] = bname
-
-    proxy_groups: List[Dict[str, Any]] = []
-    main_options: List[str] = []
-
-    # Пользовательские группы из конфига (никакого хардкода стран в коде)
+    entry_candidates = [name for name in entry_candidates_raw if name in direct_names]
     configured_groups = clash_cfg.get("groups", [])
-    regional_direct_groups: List[Dict[str, Any]] = []
-    regional_bridge_groups: List[Dict[str, Any]] = []
+    proxy_groups: List[Dict[str, Any]] = []
 
-    for g in configured_groups:
-        g_name = g.get("name")
-        g_match = g.get("match", "")
-        g_exclude = g.get("exclude", "")
-        if not g_name or not g_match:
-            continue
-        matched = [
-            name for name in direct_names
-            if _match_regex(g_match, name) and not _match_regex(g_exclude, name)
-        ]
-        if not matched:
-            continue
-        regional_direct_groups.append({"name": g_name, "type": "select", "proxies": matched})
-        if entry_candidates and g.get("bridge", True):
-            b_matched = [bridge_map[m] for m in matched if m in bridge_map]
-            if b_matched:
-                bg_name = f"{bridge_group_prefix}{g_name}"
-                regional_bridge_groups.append({"name": bg_name, "type": "select", "proxies": b_matched})
+    if layout != "grouped":
+        exit_group_name = clash_cfg.get("exit_group_name", "🌍 2. Выход (Сервер)")
+        exclude_entry_from_exit = bool(clash_cfg.get("exclude_entry_from_exit", True))
+        exit_pool = (
+            [name for name in direct_names if name not in entry_set]
+            if (exclude_entry_from_exit and entry_candidates)
+            else list(direct_names)
+        )
+        ordered_exit_list: List[str] = []
+        seen_in_order: set = set()
 
-    # Наполняем главный переключатель
-    for bg in regional_bridge_groups:
-        main_options.append(bg["name"])
-    for dg in regional_direct_groups:
-        main_options.append(dg["name"])
+        for g in configured_groups:
+            g_match = g.get("match", "")
+            g_exclude = g.get("exclude", "")
+            if not g_match:
+                continue
+            for name in exit_pool:
+                if name in seen_in_order:
+                    continue
+                if _match_regex(g_match, name) and not _match_regex(g_exclude, name):
+                    ordered_exit_list.append(name)
+                    seen_in_order.add(name)
 
-    all_bridge_group_name = clash_cfg.get("all_bridge_group_name", "🎯 Все серверы (Мост)")
-    all_direct_group_name = clash_cfg.get("all_direct_group_name", "⚡ Все серверы (Прямой)")
+        for name in exit_pool:
+            if name not in seen_in_order:
+                ordered_exit_list.append(name)
+                seen_in_order.add(name)
 
-    if bridge_names:
-        main_options.append(all_bridge_group_name)
-    if direct_names:
-        main_options.append(all_direct_group_name)
-    main_options.append("DIRECT")
+        ordered_exit_list.append("DIRECT")
+        ordered_exit_list.extend(info_proxy_names)
 
-    proxy_groups.append({"name": main_group_name, "type": "select", "proxies": main_options})
+        proxy_groups.append({"name": exit_group_name, "type": "select", "proxies": ordered_exit_list})
+        if entry_candidates:
+            proxy_groups.append({
+                "name": entry_group_name,
+                "type": "select",
+                "proxies": [entry_auto_name, "DIRECT"] + entry_candidates,
+            })
+            proxy_groups.append({
+                "name": entry_auto_name,
+                "type": "url-test",
+                "hidden": True,
+                "proxies": entry_candidates,
+                "url": clash_cfg.get("entry_health_url", "https://cp.cloudflare.com/generate_204"),
+                "interval": int(clash_cfg.get("entry_health_interval", 90)),
+                "tolerance": int(clash_cfg.get("entry_health_tolerance", 80)),
+            })
+        default_target_group = exit_group_name
+    else:
+        main_group_name = clash_cfg.get("main_group_name", "🛡️ Режим")
+        bridge_prefix = clash_cfg.get("bridge_node_prefix", "[Мост] ")
+        bridge_group_prefix = clash_cfg.get("bridge_group_prefix", "🌉 ")
 
-    if entry_candidates:
-        proxy_groups.append({
-            "name": entry_group_name,
-            "type": "select",
-            "proxies": [entry_auto_name, "DIRECT"] + entry_candidates,
-        })
-        proxy_groups.append({
-            "name": entry_auto_name,
-            "type": "url-test",
-            "proxies": entry_candidates,
-            "url": clash_cfg.get("entry_health_url", "https://cp.cloudflare.com/generate_204"),
-            "interval": int(clash_cfg.get("entry_health_interval", 90)),
-            "tolerance": int(clash_cfg.get("entry_health_tolerance", 80)),
-        })
+        # Клонируем узлы для каскада (dialer-proxy на Шаг 1), если заданы входные кандидаты
+        bridge_names: List[str] = []
+        bridge_map: Dict[str, str] = {}
+        if entry_candidates:
+            for p in list(proxies):
+                if p["name"] in info_proxy_names:
+                    continue
+                bp = copy.deepcopy(p)
+                bname = _unique_name(f"{bridge_prefix}{p['name']}", used_names)
+                bp["name"] = bname
+                bp["dialer-proxy"] = entry_group_name
+                proxies.append(bp)
+                bridge_names.append(bname)
+                bridge_map[p["name"]] = bname
 
-    proxy_groups.extend(regional_bridge_groups)
-    proxy_groups.extend(regional_direct_groups)
+        main_options: List[str] = []
+        regional_direct_groups: List[Dict[str, Any]] = []
+        regional_bridge_groups: List[Dict[str, Any]] = []
 
-    if bridge_names:
-        proxy_groups.append({"name": all_bridge_group_name, "type": "select", "proxies": bridge_names})
-    if direct_names:
-        proxy_groups.append({"name": all_direct_group_name, "type": "select", "proxies": info_proxy_names + direct_names})
+        for g in configured_groups:
+            g_name = g.get("name")
+            g_match = g.get("match", "")
+            g_exclude = g.get("exclude", "")
+            if not g_name or not g_match:
+                continue
+            matched = [
+                name for name in direct_names
+                if _match_regex(g_match, name) and not _match_regex(g_exclude, name)
+            ]
+            if not matched:
+                continue
+            regional_direct_groups.append({"name": g_name, "type": "select", "proxies": matched})
+            if entry_candidates and g.get("bridge", True):
+                b_matched = [bridge_map[m] for m in matched if m in bridge_map]
+                if b_matched:
+                    bg_name = f"{bridge_group_prefix}{g_name}"
+                    regional_bridge_groups.append({"name": bg_name, "type": "select", "proxies": b_matched})
 
-    rules = clash_cfg.get("rules") or [f"MATCH,{main_group_name}"]
+        for bg in regional_bridge_groups:
+            main_options.append(bg["name"])
+        for dg in regional_direct_groups:
+            main_options.append(dg["name"])
+
+        all_bridge_group_name = clash_cfg.get("all_bridge_group_name", "🎯 Все серверы (Мост)")
+        all_direct_group_name = clash_cfg.get("all_direct_group_name", "⚡ Все серверы (Прямой)")
+
+        if bridge_names:
+            main_options.append(all_bridge_group_name)
+        if direct_names:
+            main_options.append(all_direct_group_name)
+        main_options.append("DIRECT")
+
+        proxy_groups.append({"name": main_group_name, "type": "select", "proxies": main_options})
+
+        if entry_candidates:
+            proxy_groups.append({
+                "name": entry_group_name,
+                "type": "select",
+                "proxies": [entry_auto_name, "DIRECT"] + entry_candidates,
+            })
+            proxy_groups.append({
+                "name": entry_auto_name,
+                "type": "url-test",
+                "hidden": True,
+                "proxies": entry_candidates,
+                "url": clash_cfg.get("entry_health_url", "https://cp.cloudflare.com/generate_204"),
+                "interval": int(clash_cfg.get("entry_health_interval", 90)),
+                "tolerance": int(clash_cfg.get("entry_health_tolerance", 80)),
+            })
+
+        proxy_groups.extend(regional_bridge_groups)
+        proxy_groups.extend(regional_direct_groups)
+
+        if bridge_names:
+            proxy_groups.append({"name": all_bridge_group_name, "type": "select", "proxies": bridge_names})
+        if direct_names:
+            proxy_groups.append({"name": all_direct_group_name, "type": "select", "proxies": info_proxy_names + direct_names})
+        default_target_group = main_group_name
+
+    rules = clash_cfg.get("rules") or [f"MATCH,{default_target_group}"]
     if not any(str(r).startswith("MATCH,") for r in rules):
-        rules = list(rules) + [f"MATCH,{main_group_name}"]
+        rules = list(rules) + [f"MATCH,{default_target_group}"]
 
     full_cfg: Dict[str, Any] = {
         "mixed-port": int(clash_cfg.get("mixed_port", 7890)),

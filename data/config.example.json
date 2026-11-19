@@ -30,13 +30,19 @@
     }
   ],
   "clash": {
-    "prefix_merged_labels": true,
-    "show_limits_in_merged": true,
-    "main_group_name": "🛡️ Режим",
+    "layout": "flat",
+    "exit_group_name": "🌍 2. Выход (Сервер)",
     "entry_group_name": "✈️ 1. Вход (Шаг 1)",
     "entry_auto_name": "⚡ Авто · Вход",
+    "prefix_merged_labels": true,
+    "show_limits_in_merged": true,
+    "include_extra_outbounds": false,
+    "reality_mlkem768": true,
+    "reality_fingerprint": "chrome",
+    "exclude_nodes": "",
+    "exclude_entry_from_exit": true,
     "entry_subscription_ids": ["2"],
-    "entry_match": "🇷🇺|Moscow|Saint-Petersburg|Russia|ruyt|rudisc|\\[WL\\]",
+    "entry_match": "🇷🇺|Moscow|Saint-Petersburg|Russia|\\[WL\\]",
     "entry_health_url": "https://cp.cloudflare.com/generate_204",
     "entry_health_interval": 90,
     "entry_health_tolerance": 80,
@@ -64,18 +70,18 @@
       }
     ],
     "rules": [
-      "MATCH,🛡️ Режим"
+      "MATCH,🌍 2. Выход (Сервер)"
     ]
   },
   "xray_chains": [
     {
-      "name": "🌉 МСК gRPC ➔ США #1",
+      "name": "🌉 МСК gRPC ➔ США #4",
       "via": "Moscow #1.*GRPC",
-      "to": "USA #1"
+      "to": "USA #4.*TCP"
     },
     {
-      "name": "🌉 СПб TCP ➔ США #1",
-      "via": "Saint-Petersburg #1",
+      "name": "🌉 МСК gRPC ➔ США #1",
+      "via": "Moscow #1.*GRPC",
       "to": "USA #1"
     }
   ]
